@@ -1,174 +1,108 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { AddressInput } from './components/AddressInput'
-import { FeeTable } from './components/FeeTable'
-import { type ProviderRowData } from './components/ProviderRow'
-import { getDistanceKm, type ResolvedAddress } from './lib/goong'
-import { fetchGhnFee } from './lib/ghn'
-import { fetchGhtkFee } from './lib/ghtk'
-import { fetchAhamoveFee } from './lib/ahamove'
-import { fetchLalamoveFee } from './lib/lalamove'
-import { estimateGrabFee } from './lib/grabexpress'
-import { estimateBeFee } from './lib/bedelivery'
+import { autocomplete, resolvePlaceId, getDistanceKm, type ResolvedAddress } from './lib/goong'
+
+const FROM_ADDRESS_QUERY = '45 Đường Số 29, Khu phố 1, An Khánh, Hồ Chí Minh 70000, Việt Nam'
+const DEFAULT_BASE_FEE = 20000
+const DEFAULT_PER_KM_FEE = 5000
 
 type CalcState = 'idle' | 'loading' | 'done'
 
-const LOADING_ROWS: ProviderRowData[] = [
-  { provider: 'GHN', service: 'Express', eta: '1–2 ngày', fee: null, estimated: false, status: 'loading' },
-  { provider: 'GHN', service: 'Standard', eta: '2–3 ngày', fee: null, estimated: false, status: 'loading' },
-  { provider: 'GHTK', service: 'Economy', eta: '3–5 ngày', fee: null, estimated: false, status: 'loading' },
-  { provider: 'Ahamove', service: 'Instant', eta: '2–4 giờ', fee: null, estimated: false, status: 'loading' },
-  { provider: 'Lalamove', service: 'Motorbike', eta: 'Trong ngày', fee: null, estimated: false, status: 'loading' },
-  { provider: 'Lalamove', service: 'Van', eta: 'Trong ngày', fee: null, estimated: false, status: 'loading' },
-  { provider: 'GrabExpress', service: 'Express', eta: '2 giờ', fee: null, estimated: true, status: 'loading' },
-  { provider: 'beDelivery', service: 'Express', eta: '2 giờ', fee: null, estimated: true, status: 'loading' },
-]
+function formatVnd(n: number) {
+  return n.toLocaleString('vi-VN') + ' ₫'
+}
 
 export default function App() {
   const [from, setFrom] = useState<ResolvedAddress | null>(null)
+  const [fromError, setFromError] = useState('')
   const [to, setTo] = useState<ResolvedAddress | null>(null)
-  const [weight, setWeight] = useState(500)
-  const [value, setValue] = useState(300000)
+  const [baseFee, setBaseFee] = useState(DEFAULT_BASE_FEE)
+  const [perKmFee, setPerKmFee] = useState(DEFAULT_PER_KM_FEE)
   const [calcState, setCalcState] = useState<CalcState>('idle')
-  const [rows, setRows] = useState<ProviderRowData[]>([])
+  const [distanceKm, setDistanceKm] = useState<number | null>(null)
+  const [fee, setFee] = useState<number | null>(null)
+  const [error, setError] = useState('')
+
+  useEffect(() => {
+    let cancelled = false
+    async function resolveFrom() {
+      try {
+        const suggestions = await autocomplete(FROM_ADDRESS_QUERY)
+        if (suggestions.length === 0) throw new Error('no suggestions')
+        const resolved = await resolvePlaceId(suggestions[0].place_id, suggestions[0].description)
+        if (!cancelled) setFrom(resolved)
+      } catch {
+        if (!cancelled) setFromError('Không thể xác định địa chỉ lấy hàng cố định')
+      }
+    }
+    resolveFrom()
+    return () => {
+      cancelled = true
+    }
+  }, [])
 
   const canCalculate = from !== null && to !== null
 
   async function calculate() {
     if (!from || !to) return
     setCalcState('loading')
-    setRows(LOADING_ROWS)
-
-    const timeout = (ms: number) =>
-      new Promise<never>((_, reject) => setTimeout(() => reject(new Error('timeout')), ms))
-
-    const race = <T,>(p: Promise<T>) => Promise.race([p, timeout(8000)])
-
-    const results = await Promise.allSettled([
-      race(fetchGhnFee(from, to, weight)),
-      race(fetchGhtkFee(from, to, weight, value)),
-      race(fetchAhamoveFee(from, to)),
-      race(fetchLalamoveFee(from, to)),
-      race(getDistanceKm(from, to)),
-    ])
-
-    const ghn = results[0].status === 'fulfilled' ? results[0].value : null
-    const ghtkFee = results[1].status === 'fulfilled' ? results[1].value : null
-    const ahamoveFee = results[2].status === 'fulfilled' ? results[2].value : null
-    const lalamove = results[3].status === 'fulfilled' ? results[3].value : null
-    const distKm = results[4].status === 'fulfilled' ? results[4].value : 0
-
-    const newRows: ProviderRowData[] = [
-      {
-        provider: 'GHN',
-        service: 'Express',
-        eta: '1–2 ngày',
-        fee: ghn?.express ?? null,
-        estimated: false,
-        status: ghn?.express != null ? 'ok' : 'unavailable',
-      },
-      {
-        provider: 'GHN',
-        service: 'Standard',
-        eta: '2–3 ngày',
-        fee: ghn?.standard ?? null,
-        estimated: false,
-        status: ghn?.standard != null ? 'ok' : 'unavailable',
-      },
-      {
-        provider: 'GHTK',
-        service: 'Economy',
-        eta: '3–5 ngày',
-        fee: ghtkFee,
-        estimated: false,
-        status: ghtkFee != null ? 'ok' : 'unavailable',
-      },
-      {
-        provider: 'Ahamove',
-        service: 'Instant',
-        eta: '2–4 giờ',
-        fee: ahamoveFee,
-        estimated: false,
-        status: ahamoveFee != null ? 'ok' : 'unavailable',
-      },
-      {
-        provider: 'Lalamove',
-        service: 'Motorbike',
-        eta: 'Trong ngày',
-        fee: lalamove?.motorcycle ?? null,
-        estimated: false,
-        status: lalamove?.motorcycle != null ? 'ok' : 'unavailable',
-      },
-      {
-        provider: 'Lalamove',
-        service: 'Van',
-        eta: 'Trong ngày',
-        fee: lalamove?.van ?? null,
-        estimated: false,
-        status: lalamove?.van != null ? 'ok' : 'unavailable',
-      },
-      {
-        provider: 'GrabExpress',
-        service: 'Express',
-        eta: '2 giờ',
-        fee: estimateGrabFee(distKm),
-        estimated: true,
-        status: 'ok',
-      },
-      {
-        provider: 'beDelivery',
-        service: 'Express',
-        eta: '2 giờ',
-        fee: estimateBeFee(distKm),
-        estimated: true,
-        status: 'ok',
-      },
-    ]
-
-    setRows(newRows)
-    setCalcState('done')
+    setError('')
+    try {
+      const km = await getDistanceKm(from, to)
+      setDistanceKm(km)
+      setFee(Math.round(baseFee + km * perKmFee))
+      setCalcState('done')
+    } catch {
+      setError('Không thể tính khoảng cách giữa hai địa chỉ')
+      setCalcState('idle')
+    }
   }
 
   return (
     <div className="min-h-screen bg-gray-50">
       <header className="bg-white border-b border-gray-200 px-4 py-4 shadow-sm">
         <div className="max-w-4xl mx-auto">
-          <h1 className="text-xl font-bold text-gray-900">So sánh phí giao hàng</h1>
-          <p className="text-sm text-gray-500 mt-0.5">GHN · GHTK · Ahamove · Lalamove · GrabExpress · beDelivery</p>
+          <h1 className="text-xl font-bold text-gray-900">Tính phí giao hàng</h1>
+          <p className="text-sm text-gray-500 mt-0.5">Phí ship = Phí cơ bản + (Số km × Đơn giá/km)</p>
         </div>
       </header>
 
       <main className="max-w-4xl mx-auto px-4 py-6 space-y-6">
-        {/* Address row */}
         <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-5">
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4 items-end">
-            <AddressInput label="Địa chỉ lấy hàng" placeholder="Nhập địa chỉ người gửi..." onSelect={setFrom} />
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Địa chỉ lấy hàng</label>
+              <input
+                type="text"
+                value={from?.description ?? FROM_ADDRESS_QUERY}
+                disabled
+                className="w-full border border-gray-300 rounded-lg px-4 py-2.5 text-sm bg-gray-100 text-gray-500"
+              />
+              {fromError && <p className="text-xs text-red-500 mt-1">{fromError}</p>}
+            </div>
             <AddressInput label="Địa chỉ giao hàng" placeholder="Nhập địa chỉ người nhận..." onSelect={setTo} />
           </div>
 
-          {/* Parcel details + button */}
           <div className="mt-4 flex flex-col sm:flex-row gap-3 items-end">
             <div className="flex-1">
-              <label className="block text-sm font-medium text-gray-700 mb-1">
-                Cân nặng (gram)
-              </label>
-              <input
-                type="number"
-                min={1}
-                value={weight}
-                onChange={(e) => setWeight(Math.max(1, Number(e.target.value)))}
-                className="w-full border border-gray-300 rounded-lg px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-              />
-            </div>
-            <div className="flex-1">
-              <label className="block text-sm font-medium text-gray-700 mb-1">
-                Giá trị hàng (VND)
-              </label>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Phí cơ bản (VND)</label>
               <input
                 type="number"
                 min={0}
                 step={1000}
-                value={value}
-                onChange={(e) => setValue(Math.max(0, Number(e.target.value)))}
+                value={baseFee}
+                onChange={(e) => setBaseFee(Math.max(0, Number(e.target.value)))}
+                className="w-full border border-gray-300 rounded-lg px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+              />
+            </div>
+            <div className="flex-1">
+              <label className="block text-sm font-medium text-gray-700 mb-1">Đơn giá mỗi km (VND)</label>
+              <input
+                type="number"
+                min={0}
+                step={500}
+                value={perKmFee}
+                onChange={(e) => setPerKmFee(Math.max(0, Number(e.target.value)))}
                 className="w-full border border-gray-300 rounded-lg px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
               />
             </div>
@@ -180,11 +114,15 @@ export default function App() {
               {calcState === 'loading' ? 'Đang tính...' : 'Tính phí'}
             </button>
           </div>
+
+          {error && <p className="text-xs text-red-500 mt-2">{error}</p>}
         </div>
 
-        {/* Results */}
-        {(calcState === 'loading' || calcState === 'done') && rows.length > 0 && (
-          <FeeTable rows={rows} />
+        {calcState === 'done' && fee !== null && (
+          <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-5 space-y-1">
+            <p className="text-sm text-gray-500">Khoảng cách: {distanceKm?.toFixed(1)} km</p>
+            <p className="text-lg font-semibold text-gray-900">Phí ship: {formatVnd(fee)}</p>
+          </div>
         )}
       </main>
     </div>
