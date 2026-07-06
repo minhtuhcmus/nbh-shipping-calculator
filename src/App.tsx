@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { AddressInput } from './components/AddressInput'
-import { autocomplete, resolvePlaceId, getDistanceKm, type ResolvedAddress } from './lib/goong'
+import { RouteMap } from './components/RouteMap'
+import { autocomplete, resolvePlaceId, getDistanceKm, getRoute, type ResolvedAddress } from './lib/goong'
 
 const FROM_ADDRESS_QUERY = '45 Đường Số 29, Khu phố 1, An Khánh, Hồ Chí Minh 70000, Việt Nam'
 const DEFAULT_BASE_FEE = 20000
@@ -20,6 +21,7 @@ export default function App() {
   const [perKmFee, setPerKmFee] = useState(DEFAULT_PER_KM_FEE)
   const [calcState, setCalcState] = useState<CalcState>('idle')
   const [distanceKm, setDistanceKm] = useState<number | null>(null)
+  const [routeCoordinates, setRouteCoordinates] = useState<[number, number][] | null>(null)
   const [fee, setFee] = useState<number | null>(null)
   const [error, setError] = useState('')
 
@@ -48,8 +50,10 @@ export default function App() {
     setCalcState('loading')
     setError('')
     try {
-      const km = await getDistanceKm(from, to)
+      const route = await getRoute(from, to)
+      const km = route?.distanceKm ?? (await getDistanceKm(from, to))
       setDistanceKm(km)
+      setRouteCoordinates(route?.coordinates ?? null)
       setFee(Math.round(baseFee + km * perKmFee))
       setCalcState('done')
     } catch {
@@ -123,6 +127,10 @@ export default function App() {
             <p className="text-sm text-gray-500">Khoảng cách: {distanceKm?.toFixed(1)} km</p>
             <p className="text-lg font-semibold text-gray-900">Phí ship: {formatVnd(fee)}</p>
           </div>
+        )}
+
+        {calcState === 'done' && from && to && (
+          <RouteMap from={from} to={to} routeCoordinates={routeCoordinates} />
         )}
       </main>
     </div>
